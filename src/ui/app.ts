@@ -10,12 +10,13 @@
  */
 
 import { FAMILIES, type GlyphId } from '../ring/glyphs';
-import { BASE_NAME } from '../game/data';
-import { type BillId, CITATION_FINE, FREE_CITATIONS, HOSTILE_FINE, type Household, bills, night, shiftPay, startingHousehold } from '../game/economy';
+import { BASE_NAME, DAY_NOTES, SUPERVISOR } from '../game/data';
+import { type Campaign, type KeyValueStorage, endDay as closeDay, epilogue, load, newCampaign, recordEndless, save } from '../game/campaign';
+import { type BillId, CITATION_FINE, FREE_CITATIONS, HOSTILE_FINE, WAGE, bills } from '../game/economy';
 import { compare } from '../game/inspect';
-import { rulesById } from '../game/rules';
+import { MAX_DAY, newRules, rulesById } from '../game/rules';
 import { Rng, deriveSeed } from '../game/rng';
-import { type CallResult, DESK_RULES, HOSTILE_LIMIT, SHIFT_END, type ShiftState, callNext, decide, setClock, startShift } from '../game/shift';
+import { type CallResult, HOSTILE_LIMIT, type Mode, SHIFT_END, type ShiftState, callNext, decide, setClock, startShift } from '../game/shift';
 import type { Arrival, Reference, TeamStatus, Voice } from '../game/types';
 import { h } from './dom';
 import { Gate } from './gate';
@@ -32,7 +33,14 @@ const DESK_TOP = 420;
 const CONSOLE_LEFT = 1278;
 
 const STATUS_LABEL: Record<TeamStatus, string> = { offworld: 'Off-world', overdue: 'Overdue', home: 'On base', missing: 'Missing' };
-const clockText = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const clockText = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const freshSeed = () => `shift-${Date.now().toString(36)}`;
+
+const storage: KeyValueStorage = {
+  getItem: (k) => localStorage.getItem(k),
+  setItem: (k, v) => localStorage.setItem(k, v),
+  removeItem: (k) => localStorage.removeItem(k),
+};
 
 /** The address an arrival dials in from: one glyph from each family (cosmetic). */
 function originOf(a: Arrival): GlyphId[] {
@@ -74,6 +82,7 @@ export function startApp(root: HTMLElement) {
   // ---------------------------------------------------------------------------
   const gate = new Gate();
   const clockFace = h('div', { class: 'clock-digits' }, '08:00');
+  const dayPlate = h('div', { class: 'plate' }, BASE_NAME.toUpperCase());
   const dateLine = h('div', { class: 'clock-date' }, '');
   const lamps = Array.from({ length: HOSTILE_LIMIT }, () => h('span', { class: 'lamp' }));
   const alarmLight = h('div', { class: 'alarm-light' });
@@ -92,7 +101,7 @@ export function startApp(root: HTMLElement) {
 
   stage.append(
     h('div', { class: 'wall' }),
-    h('div', { class: 'wall-clock' }, h('div', { class: 'plate' }, BASE_NAME.toUpperCase()), clockFace, dateLine),
+    h('div', { class: 'wall-clock' }, dayPlate, clockFace, dateLine),
     h('div', { class: 'poster' }, h('div', { class: 'poster-top' }, 'CHECK'), h('div', { class: 'poster-mid' }, 'EVERY'), h('div', { class: 'poster-top' }, 'CODE'), h('div', { class: 'poster-small' }, 'One wrong opening is one too many.')),
     h('div', { class: 'integrity' }, h('div', { class: 'plate' }, 'BASE INTEGRITY'), h('div', { class: 'lamps' }, lamps)),
     h('div', { class: 'drawing' }, drawing(), h('span', {}, 'for the iris man')),
@@ -122,11 +131,14 @@ export function startApp(root: HTMLElement) {
   // State
   // ---------------------------------------------------------------------------
   let phase: Phase = 'title';
-  let seed = `desk-${Date.now().toString(36)}`;
-  let shift: ShiftState = startShift({ mode: 'desk', seed, day: 0, lost: [] });
+  let notice = '';
+  const loaded = load(storage);
+  let campaign: Campaign = loaded.kind === 'ok' ? loaded.campaign : newCampaign(freshSeed());
+  if (loaded.kind === 'corrupt') notice = `Your saved campaign could not be read (${loaded.reason}). A new one has been started.`;
+  let mode: Mode = 'campaign';
+  let shift: ShiftState = startShift({ mode: 'campaign', seed: campaign.seed, day: campaign.day, lost: campaign.lost });
   let minutes = shift.clock;
-  let household: Household = startingHousehold();
-  let gaps = new Rng(deriveSeed(seed, 'gaps'));
+  let gaps = new Rng(deriveSeed(campaign.seed, 'gaps'));
   let tick: ReturnType<typeof setInterval> | undefined;
   let pending: ReturnType<typeof setTimeout> | undefined;
   let z = 10;
@@ -173,42 +185,60 @@ export function startApp(root: HTMLElement) {
 
   const f = (id: string, text: string, cls = '') => h('span', { class: `field ${cls}`, 'data-field': id }, text);
 
+  /** Today's paperwork: only what today's orders need comes to the desk. */
   function layOutPaperwork(ref: Reference) {
     docsLayer.replaceChildren();
     const team = (id: string) => ref.roster.find((t) => t.id === id)?.name ?? id;
+    const has = (...ids: string[]) => ids.some((id) => ref.rules.includes(id as never));
+    const fresh = new Set(mode === 'campaign' ? newRules(ref.day).map((r) => r.id) : []);
+    const expiry = has('expired');
+    const roster = has('not-offworld', 'missing');
+    const missions = has('wrong-leader', 'wrong-headcount', 'wrong-origin');
     doc('orders', 352, 452,
       h('div', { class: 'doc-title' }, 'Standing orders'),
-      h('div', { class: 'doc-sub' }, `Day shift · ${ref.date}`),
-      h('ol', {}, rulesById(DESK_RULES).map((r) => h('li', {}, h('strong', {}, r.title), ' ', r.briefing))),
+      h('div', { class: 'doc-sub' }, mode === 'campaign' ? `Day ${ref.day} · ${ref.date}` : `Endless · ${ref.date}`),
+      h('ol', {}, rulesById(ref.rules).map((r) => h('li', { class: fresh.has(r.id) ? 'new' : '' }, h('strong', {}, r.title), fresh.has(r.id) ? h('span', { class: 'new-tag' }, 'NEW') : null, ' ', r.briefing))),
     );
     doc('codes clipboard', 600, 438,
       h('div', { class: 'clip' }),
       h('div', { class: 'doc-title' }, 'Valid ID codes'),
-      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Code'), h('th', {}, 'Team'), h('th', {}, 'Expires'))),
+      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Code'), h('th', {}, 'Team'), expiry ? h('th', {}, 'Expires') : null)),
         h('tbody', {}, [...ref.codes].sort((a, b) => team(a.teamId).localeCompare(team(b.teamId))).map((c) =>
-          h('tr', {}, h('td', {}, f(`codes.${c.code}.code`, c.code, 'mono')), h('td', {}, f(`codes.${c.code}.team`, team(c.teamId))), h('td', {}, f(`codes.${c.code}.expires`, c.expires, 'mono'))),
+          h('tr', {}, h('td', {}, f(`codes.${c.code}.code`, c.code, 'mono')), h('td', {}, f(`codes.${c.code}.team`, team(c.teamId))), expiry ? h('td', {}, f(`codes.${c.code}.expires`, c.expires, 'mono')) : null),
         )),
       ),
     );
-    doc('roster card', 860, 470,
-      h('div', { class: 'doc-title' }, 'Team roster'),
-      h('table', {}, h('tbody', {}, ref.roster.map((t) =>
-        h('tr', { class: `st-${t.status}` }, h('td', {}, t.name), h('td', {}, f(`roster.${t.id}.status`, STATUS_LABEL[t.status])), h('td', { class: 'remark' }, t.remark ?? '')),
-      ))),
-    );
-    doc('missions binder', 950, 440,
-      h('div', { class: 'rings' }, h('span', {}), h('span', {}), h('span', {})),
-      h('div', { class: 'doc-title' }, 'Mission log'),
-      h('div', { class: 'entries' }, ref.missions.map((m) =>
-        h('div', { class: 'entry' },
-          h('div', { class: 'entry-head' }, team(m.teamId).toUpperCase(), ' · ', f(`missions.${m.teamId}.destination`, m.destination, 'mono'), ' · party of ', f(`missions.${m.teamId}.size`, String(m.size))),
-          h('div', {}, f(`missions.${m.teamId}.leader`, m.leader), h('span', { class: 'since' }, ` · out ${m.departed.slice(5)}`)),
-        ),
-      )),
-    );
-    doc('bulletins memo', 1000, 690,
+    if (roster) {
+      doc('roster card', 860, 470,
+        h('div', { class: 'doc-title' }, 'Team roster'),
+        h('table', {}, h('tbody', {}, ref.roster.map((t) =>
+          h('tr', { class: `st-${t.status}` }, h('td', {}, t.name), h('td', {}, f(`roster.${t.id}.status`, STATUS_LABEL[t.status])), h('td', { class: 'remark' }, t.remark ?? '')),
+        ))),
+      );
+    }
+    if (missions) {
+      doc('missions binder', 950, 440,
+        h('div', { class: 'rings' }, h('span', {}), h('span', {}), h('span', {})),
+        h('div', { class: 'doc-title' }, 'Mission log'),
+        h('div', { class: 'entries' }, ref.missions.map((m) =>
+          h('div', { class: 'entry' },
+            h('div', { class: 'entry-head' }, team(m.teamId).toUpperCase(), ' · ', f(`missions.${m.teamId}.destination`, m.destination, 'mono'), ' · party of ', f(`missions.${m.teamId}.size`, String(m.size))),
+            h('div', {}, f(`missions.${m.teamId}.leader`, m.leader), h('span', { class: 'since' }, ` · out ${m.departed.slice(5)}`)),
+          ),
+        )),
+      );
+    }
+    doc('bulletins memo', roster ? 1000 : 900, roster ? 690 : 480,
       h('div', { class: 'doc-title' }, 'Bulletins'),
-      h('ul', {}, ref.bulletins.map((b) => h('li', {}, h('span', { class: 'mono' }, b.time), ' ', b.text))),
+      h('ul', {}, ref.bulletins.map((b) => {
+        // The duress digit can be inspected against the terminal's auth digit.
+        if (b.effect?.kind === 'duress') {
+          const d = String(b.effect.digit);
+          const i = b.text.indexOf(d);
+          return h('li', { class: 'effect' }, h('span', { class: 'mono' }, b.time), ' ', b.text.slice(0, i), f('bulletin.duress', d), b.text.slice(i + d.length));
+        }
+        return h('li', { class: b.effect ? 'effect' : '' }, h('span', { class: 'mono' }, b.time), ' ', b.text);
+      })),
     );
   }
 
@@ -261,6 +291,7 @@ export function startApp(root: HTMLElement) {
       ['ID CODE  ', f('tx.code', a.code, 'crt-big')],
       ['TEAM     ', f('tx.team', team.toUpperCase())],
       ['SENT     ', f('tx.date', a.date), ` ${a.time}`],
+      ...(shift.ref.rules.includes('duress') ? [['AUTH     ', f('tx.auth', String(a.auth))]] : []),
       ['VOICE    ', a.voice ? 'RECEIVED > PRINTER' : 'NONE'],
       [''],
       ['AWAITING DECISION ', h('span', { class: 'cursor' }, '█')],
@@ -344,13 +375,13 @@ export function startApp(root: HTMLElement) {
   // The shift
   // ---------------------------------------------------------------------------
   function startDay() {
-    shift = startShift({ mode: 'desk', seed, day: 0, lost: [] });
-    gaps = new Rng(deriveSeed(seed, 'gaps'));
+    gaps = new Rng(deriveSeed(shift.config.seed, `gaps-${mode}-${shift.config.day}`));
     minutes = shift.clock;
     lamps.forEach((l) => l.classList.remove('on'));
     citations.length = 0;
     layOutPaperwork(shift.ref);
     dateLine.textContent = shift.ref.date;
+    dayPlate.textContent = mode === 'campaign' ? `DAY ${shift.config.day} OF ${MAX_DAY}` : 'ENDLESS';
     clockFace.textContent = clockText(minutes);
     clockFace.classList.remove('late');
     idleScreen();
@@ -358,10 +389,10 @@ export function startApp(root: HTMLElement) {
     clearInterval(tick);
     tick = setInterval(() => {
       if (phase === 'title' || phase === 'briefing' || phase === 'evening') return;
-      minutes = Math.min(SHIFT_END, minutes + 1);
+      minutes = mode === 'campaign' ? Math.min(SHIFT_END, minutes + 1) : minutes + 1;
       shift = setClock(shift, minutes);
       clockFace.textContent = clockText(minutes);
-      clockFace.classList.toggle('late', minutes >= SHIFT_END - 30);
+      clockFace.classList.toggle('late', mode === 'campaign' && minutes >= SHIFT_END - 30);
     }, MINUTE_MS);
     waitForNext(3);
   }
@@ -373,7 +404,7 @@ export function startApp(root: HTMLElement) {
     voiceLamp.classList.remove('on');
     clearTimeout(pending);
     pending = setTimeout(() => {
-      if (minutes >= SHIFT_END) return endDay();
+      if (mode === 'campaign' && minutes >= SHIFT_END) return endDay();
       shift = callNext(setClock(shift, minutes));
       if (!shift.current) return endDay();
       incoming(shift.current);
@@ -493,30 +524,66 @@ export function startApp(root: HTMLElement) {
   function title() {
     phase = 'title';
     idleScreen();
+    docsLayer.replaceChildren();
+    const over = campaign.status !== 'active';
+    const started = campaign.day > 1 || campaign.reports.length > 0;
+    const seedInput = h('input', { class: 'seed-input', placeholder: 'any word', maxlength: 30, 'aria-label': 'Endless seed' }) as HTMLInputElement;
+    let armed = false;
+    const fresh = h('button', { class: 'paper-btn quiet' }, started ? 'New campaign' : 'Start');
+    fresh.addEventListener('click', () => {
+      if (started && !over && !armed) {
+        armed = true;
+        fresh.textContent = 'Click again: lose this campaign';
+        return;
+      }
+      campaign = newCampaign(freshSeed(), campaign.endlessBest);
+      save(storage, campaign);
+      briefing('campaign');
+    });
     openModal(
       h('div', { class: 'stamp-title' }, 'SHUTTER DUTY'),
       h('p', { class: 'typed' }, `${BASE_NAME}. Second ring site of the Survey. You are the ring attendant on the day shift.`),
       h('p', { class: 'typed' }, 'Teams coming home send an ID code, and sometimes a voice. Check them against the paperwork. Open the iris for your own people. Keep it shut on everyone else.'),
-      h('div', { class: 'modal-buttons' }, h('button', { class: 'paper-btn', onclick: briefing }, 'Report for duty')),
-      h('p', { class: 'fine' }, 'Playable demo: one day shift.'),
+      notice ? h('p', { class: 'typed warn' }, notice) : null,
+      over ? h('p', { class: 'typed' }, campaign.status === 'complete' ? 'Your seven days are done.' : 'You were evicted. The campaign is over.') : null,
+      h('div', { class: 'modal-buttons' },
+        !over && started ? h('button', { class: 'paper-btn', onclick: () => briefing('campaign') }, `Continue: day ${campaign.day}`) : null,
+        over ? h('button', { class: 'paper-btn', onclick: () => finale() }, 'Read how it ended') : null,
+        !started && !over ? null : fresh,
+        !started && !over ? h('button', { class: 'paper-btn', onclick: () => briefing('campaign') }, 'Report for duty') : null,
+      ),
+      h('div', { class: 'endless-row' },
+        h('strong', {}, 'Endless shift. '),
+        'Every order at once, no closing time, until the base is overrun. ',
+        campaign.endlessBest ? h('span', {}, `Best: ${campaign.endlessBest.score} correct (seed "${campaign.endlessBest.seed}"). `) : null,
+        h('label', {}, 'Seed ', seedInput),
+        h('button', { class: 'paper-btn small', onclick: () => briefing('endless', seedInput.value.trim() || freshSeed()) }, 'Start endless'),
+      ),
     );
   }
 
-  function briefing() {
+  function briefing(m: Mode, endlessSeed?: string) {
     phase = 'briefing';
     tryLandscape();
-    seed = `desk-${Date.now().toString(36)}`;
-    const ref = startShift({ mode: 'desk', seed, day: 0, lost: [] }).ref;
+    mode = m;
+    shift = m === 'campaign'
+      ? startShift({ mode: 'campaign', seed: campaign.seed, day: campaign.day, lost: campaign.lost })
+      : startShift({ mode: 'endless', seed: endlessSeed ?? freshSeed(), day: MAX_DAY, lost: [] });
+    const ref = shift.ref;
+    const fresh = m === 'campaign' ? newRules(ref.day) : [];
     openModal(
-      h('div', { class: 'memo-head' }, 'MEMO · DAY SHIFT · ', ref.date),
-      h('p', { class: 'typed' }, `The shift runs 08:00 to 18:00. Every correct call earns 5 chits. Mistakes earn citations: two warnings, then ${CITATION_FINE} chits docked each. Opening for a hostile always costs ${HOSTILE_FINE}.`),
-      h('ul', { class: 'typed how' },
-        h('li', {}, 'The terminal shows each ID code. Some teams also send a voice transmission; the printer feeds the transcript onto the desk.'),
-        h('li', {}, 'Drag the paperwork about. Check codes, expiry dates and the roster; check voices against the mission log.'),
-        h('li', {}, 'INSPECT (or I): pick two lines and they are compared for you.'),
-        h('li', {}, 'Pull the IRIS lever (O) to let them through. KEEP SHUT (C) to refuse.'),
-      ),
-      h('div', { class: 'modal-buttons' }, h('button', { class: 'paper-btn', onclick: startDay }, 'Begin the shift')),
+      h('div', { class: 'memo-head' }, m === 'campaign' ? `MEMO · DAY ${ref.day} OF ${MAX_DAY} · ${ref.date}` : `ENDLESS SHIFT · SEED "${shift.config.seed}"`),
+      m === 'campaign' ? h('p', { class: 'typed note' }, DAY_NOTES[ref.day] ?? '', h('span', { class: 'signed' }, ` ${SUPERVISOR}`)) : h('p', { class: 'typed' }, 'Every order is in force. The shift does not end at 18:00: it ends when the base is overrun. Score: correct calls.'),
+      fresh.length ? h('div', { class: 'new-orders' }, h('div', { class: 'new-head' }, 'New today'), fresh.map((r) => h('p', {}, h('strong', {}, `${r.title}. `), r.briefing))) : null,
+      ref.day === 1 && m === 'campaign'
+        ? h('ul', { class: 'typed how' },
+            h('li', {}, `The shift runs 08:00 to 18:00. Each correct call earns ${WAGE} chits. Mistakes earn citations: two warnings, then ${CITATION_FINE} chits docked each; opening for a hostile always costs ${HOSTILE_FINE}.`),
+            h('li', {}, 'The terminal shows each ID code. Drag the paperwork about to check it.'),
+            h('li', {}, 'INSPECT (or I): pick two lines and they are compared for you.'),
+            h('li', {}, 'Pull the IRIS lever (O) to let them through. KEEP SHUT (C) to refuse.'),
+          )
+        : null,
+      h('div', { class: 'modal-buttons' }, h('button', { class: 'paper-btn', onclick: startDay }, 'Begin the shift'), h('button', { class: 'paper-btn quiet', onclick: title }, 'Back')),
     );
   }
 
@@ -526,23 +593,26 @@ export function startApp(root: HTMLElement) {
     clearInterval(tick);
     setControls(false);
     if (inspecting) setInspect(false);
-    const pay = shiftPay(shift.results);
-    const list = bills(household);
+    if (mode === 'endless') return endEndless();
+    const overrun = shift.status === 'overrun';
+    const household = campaign.household;
+    const list = bills(household, campaign.day);
     const chosen = new Set<BillId>(list.filter((b) => !b.required).map((b) => b.id));
+    // A dry run of the night for the ledger total.
+    const preview = () => closeDay(campaign, shift, [...chosen]);
+    const pay = preview().pay;
     const totalLine = h('div', { class: 'ledger-total' });
     const refresh = () => {
-      const cost = list.filter((b) => b.required || chosen.has(b.id)).reduce((n, b) => n + b.cost, 0);
-      const left = household.savings + pay.total - cost;
+      const left = preview().night.household.savings;
       totalLine.textContent = `Left over: ${left} chits`;
       totalLine.classList.toggle('neg', left < 0);
     };
-    const overrun = shift.status === 'overrun';
     openModal(
-      h('div', { class: 'memo-head' }, overrun ? 'RELIEVED OF DUTY' : `END OF SHIFT · ${clockText(Math.min(minutes, SHIFT_END))}`),
-      overrun ? h('p', { class: 'typed warn' }, `${HOSTILE_LIMIT} hostiles came through your gate. Security has taken over the desk.`) : null,
+      h('div', { class: 'memo-head' }, overrun ? `RELIEVED OF DUTY · DAY ${campaign.day}` : `END OF SHIFT · DAY ${campaign.day} · ${clockText(Math.min(minutes, SHIFT_END))}`),
+      overrun ? h('p', { class: 'typed warn' }, `${HOSTILE_LIMIT} hostiles came through your gate. Security has taken over the desk. No pay today, and you will work this day again.`) : null,
       h('table', { class: 'ledger' },
         h('tbody', {},
-          h('tr', {}, h('td', {}, `Correct calls (${pay.correct} × 5)`), h('td', {}, `+${pay.wages}`)),
+          h('tr', {}, h('td', {}, `Correct calls (${pay.correct} × ${WAGE})`), h('td', {}, `+${pay.wages}`)),
           h('tr', {}, h('td', {}, `Citations: ${pay.citations}`), h('td', {}, pay.fines ? `−${pay.fines}` : '0')),
           h('tr', {}, h('td', {}, 'Savings'), h('td', {}, String(household.savings))),
           list.map((b) => {
@@ -561,9 +631,10 @@ export function startApp(root: HTMLElement) {
       h('div', { class: 'modal-buttons' }, h('button', {
         class: 'paper-btn',
         onclick: () => {
-          const n = night(household, pay, [...chosen]);
-          household = n.household;
-          morning(n.morning);
+          const end = closeDay(campaign, shift, [...chosen]);
+          campaign = end.campaign;
+          save(storage, campaign);
+          morning(end.night.morning);
         },
       }, 'Go home')),
     );
@@ -571,12 +642,38 @@ export function startApp(root: HTMLElement) {
   }
 
   function morning(lines: string[]) {
+    const over = campaign.status !== 'active';
     openModal(
       h('div', { class: 'memo-head' }, 'NEXT MORNING'),
       lines.length ? h('ul', { class: 'typed' }, lines.map((l) => h('li', {}, l))) : h('p', { class: 'typed' }, 'A quiet night. Everyone slept.'),
-      h('p', { class: 'typed' }, `Savings: ${household.savings} chits.`),
-      h('p', { class: 'fine' }, 'End of the demo day. The full game would carry on: a new rule each day, the story in the paperwork, and the household to keep.'),
-      h('div', { class: 'modal-buttons' }, h('button', { class: 'paper-btn', onclick: () => { household = startingHousehold(); briefing(); } }, 'Play the day again')),
+      h('p', { class: 'typed' }, `Savings: ${campaign.household.savings} chits.`),
+      h('div', { class: 'modal-buttons' },
+        over ? h('button', { class: 'paper-btn', onclick: finale }, 'Turn the page') : h('button', { class: 'paper-btn', onclick: () => briefing('campaign') }, `To work: day ${campaign.day}`),
+        h('button', { class: 'paper-btn quiet', onclick: title }, 'Title page'),
+      ),
+    );
+  }
+
+  function finale() {
+    openModal(
+      h('div', { class: 'memo-head' }, campaign.status === 'evicted' ? 'EVICTED' : 'SEVEN DAYS ON THE IRIS'),
+      h('ul', { class: 'typed' }, epilogue(campaign).map((l) => h('li', {}, l))),
+      h('div', { class: 'modal-buttons' }, h('button', { class: 'paper-btn', onclick: title }, 'Title page')),
+    );
+  }
+
+  function endEndless() {
+    campaign = recordEndless(campaign, shift);
+    save(storage, campaign);
+    const score = shift.results.filter((r) => r.correct).length;
+    openModal(
+      h('div', { class: 'memo-head' }, 'ENDLESS SHIFT OVER'),
+      h('p', { class: 'typed' }, `The base was overrun at ${clockText(minutes)}, after ${shift.results.length} arrivals.`),
+      h('p', { class: 'typed' }, `Correct calls: ${score}. Best: ${campaign.endlessBest?.score ?? score} (seed "${campaign.endlessBest?.seed ?? shift.config.seed}").`),
+      h('div', { class: 'modal-buttons' },
+        h('button', { class: 'paper-btn', onclick: () => briefing('endless', shift.config.seed) }, 'Same seed again'),
+        h('button', { class: 'paper-btn quiet', onclick: title }, 'Title page'),
+      ),
     );
   }
 

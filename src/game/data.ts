@@ -99,3 +99,17 @@ export const VOICE_LINES = [
   '{speaker} for {team}. Dialled in from {origin}, {count} souls. Open up when you are ready, Brackwater.',
   'Brackwater Annex, {team}, {count} to come through. This is {speaker}. Origin {origin}. Over.',
 ];
+
+/** The supervisor who signs the morning memos. */
+export const SUPERVISOR = 'Supervisor I. Haig';
+
+/** The supervisor's note at the top of each day's memo. */
+export const DAY_NOTES: Record<number, string> = {
+  1: 'Welcome to the day desk. Codes only, for now: if it is on the sheet, and the right team sent it, open. If not, do not.',
+  2: 'The night shift let an expired code through. Nobody was hurt. That is not the point. Check the dates.',
+  3: 'The roster comes to your desk from today. A team that is sitting in the canteen is not out there calling home. And missing means missing.',
+  4: 'Some teams will talk to you now. The mission log is on your desk: the voice on the line must be the leader we sent.',
+  5: 'Count heads, and ask where they are calling from. Nobody comes home with more people than they went out with.',
+  6: 'Someone is copying our codes, one character at a time. Check every character. And learn the duress digit before you sit down.',
+  7: 'Command is changing its mind by the hour. When two orders disagree, the newer one stands. Read the times.',
+};
