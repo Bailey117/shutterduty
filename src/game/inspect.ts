@@ -97,6 +97,13 @@ export function compare(idA: string, idB: string, a: Arrival, ref: Reference): F
   }
   if (x.kind !== y.kind) return { result: 'unrelated', text: 'Those two have nothing to do with each other.' };
 
+  // The duress digit is the one case where agreeing is the bad news.
+  if (x.kind === 'auth' && (x.id === 'bulletin.duress' || y.id === 'bulletin.duress')) {
+    return x.value === y.value
+      ? { result: 'mismatch', text: `Duress: they sent ${x.value}, today's duress digit. The team is compromised.` }
+      : { result: 'match', text: 'Not the duress digit.' };
+  }
+
   const shown = (f: Field) => (f.kind === 'team' ? name(f.value) : f.value);
   if (x.value === y.value) return { result: 'match', text: `They match: ${shown(x)}.` };
   const whose = x.kind === 'code' && (x.teamId ?? y.teamId) ? ` (that line is ${name((x.teamId ?? y.teamId)!)}'s)` : '';

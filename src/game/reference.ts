@@ -91,6 +91,9 @@ export function buildReference(seed: string, day: number, opts: SheetOptions = {
   const beat = opts.story !== false ? STORY[day] : undefined;
   const teams = all.filter((t) => !lost.has(t.id));
   const tellStory = !!beat && teams.includes(storyTeam);
+  // The paperwork carries what today's rules need, and nothing they do not.
+  const rules = opts.rules ?? activeRules(day).map((r) => r.id);
+  const has = (id: RuleId) => rules.includes(id);
 
   // Statuses: the story team follows the script; the rest are mostly out.
   const others = rng.shuffle(teams.filter((t) => !tellStory || t !== storyTeam));
@@ -102,9 +105,9 @@ export function buildReference(seed: string, day: number, opts: SheetOptions = {
   }
   let i = 0;
   // Required statuses first, so the day's rules have something to bite on.
-  if (day >= 3 && others[i]) status.set(others[i++]!.id, 'home');
-  if (day >= 3 && others[i]) status.set(others[i++]!.id, 'home');
-  const needMissing = day >= 4 && ![...status.values()].includes('missing');
+  if (has('not-offworld') && others[i]) status.set(others[i++]!.id, 'home');
+  if (has('not-offworld') && others[i]) status.set(others[i++]!.id, 'home');
+  const needMissing = has('missing') && ![...status.values()].includes('missing');
   if (needMissing && others[i]) {
     status.set(others[i]!.id, 'missing');
     remark.set(others[i]!.id, 'No contact since last cycle');
@@ -124,9 +127,9 @@ export function buildReference(seed: string, day: number, opts: SheetOptions = {
   for (const t of roster) {
     const code = distinctCode(rng, taken);
     taken.push(code);
-    codes.push({ code, teamId: t.id, expires: day >= 2 ? addDays(date, rng.int(1, 30)) : addDays(date, 90) });
+    codes.push({ code, teamId: t.id, expires: has('expired') ? addDays(date, rng.int(1, 30)) : addDays(date, 90) });
   }
-  if (day >= 2) {
+  if (has('expired')) {
     const out = roster.filter((t) => t.status === 'offworld' || t.status === 'overdue');
     const withOld = rng.shuffle(out).slice(0, Math.max(2, Math.ceil(out.length / 2)));
     for (const t of withOld) {
@@ -155,11 +158,11 @@ export function buildReference(seed: string, day: number, opts: SheetOptions = {
       used.add(Number(b.time.slice(0, 2)) * 60 + Number(b.time.slice(3)));
     }
   }
-  if (day >= 5) {
+  if (has('duress')) {
     const digit = rng.int(0, 9);
     bulletins.push({ time: clock(minute()), text: `Today's duress digit is ${digit}. A transmission authenticated with ${digit} means the team is under duress.`, effect: { kind: 'duress', digit } });
   }
-  if (day >= 7) {
+  if (has('recalled')) {
     const out = roster.filter((t) => (t.status === 'offworld' || t.status === 'overdue') && !(tellStory && t.id === storyTeam.id));
     const [recalled, cleared] = rng.shuffle(out);
     // One team ends up recalled (cancel, then a newer recall)...
@@ -186,6 +189,5 @@ export function buildReference(seed: string, day: number, opts: SheetOptions = {
       const p = profiles.get(t.id)!;
       return { teamId: t.id, leader: p.leader, size: p.size, destination: p.destination, departed: addDays(date, -rng.int(2, 18)) };
     });
-  const rules = opts.rules ?? activeRules(day).map((r) => r.id);
   return { day, date, rules, roster, codes: sortedCodes, bulletins, missions };
 }

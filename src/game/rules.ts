@@ -109,7 +109,7 @@ export const RULES: readonly Rule[] = [
   },
   {
     id: 'missing',
-    day: 4,
+    day: 3,
     title: 'Missing teams',
     briefing: 'Teams posted missing are refused, even with a valid code. Whoever is using their code, it may not be them.',
     evidence: (a) => ['tx.team', `roster.${a.teamId}.status`],
@@ -120,7 +120,7 @@ export const RULES: readonly Rule[] = [
   },
   {
     id: 'duress',
-    day: 5,
+    day: 6,
     title: 'Duress digit',
     briefing: 'Every transmission now ends with an authentication digit. If it matches today\'s duress digit (see bulletins), the team is compromised: refuse.',
     evidence: () => ['tx.auth', 'bulletin.duress'],
@@ -155,14 +155,14 @@ export const RULES: readonly Rule[] = [
 ];
 
 /**
- * Rules about voice transmissions, checked against the mission log. They
- * only apply when a voice comes with the code and the team has a mission
- * on file (a team with no mission is caught by the roster rule instead).
+ * Rules about voice transmissions, checked against the mission log (from
+ * day 4). They only apply when a voice comes with the code and the team has
+ * a mission on file (a team with no mission is caught by the roster rule).
  */
 export const VOICE_RULES: readonly Rule[] = [
   {
     id: 'wrong-leader',
-    day: 0,
+    day: 4,
     title: 'Who is speaking',
     briefing: 'A voice transmission comes from the team leader. The speaker must be the leader in the mission log.',
     evidence: (a, ref) => (a.voice && missionFor(ref, a.teamId) ? ['voice.speaker', `missions.${a.teamId}.leader`] : null),
@@ -173,7 +173,7 @@ export const VOICE_RULES: readonly Rule[] = [
   },
   {
     id: 'wrong-headcount',
-    day: 0,
+    day: 5,
     title: 'Headcount',
     briefing: 'The number coming home must match the number that went out, as logged.',
     evidence: (a, ref) => (a.voice && missionFor(ref, a.teamId) ? ['voice.headcount', `missions.${a.teamId}.size`] : null),
@@ -184,7 +184,7 @@ export const VOICE_RULES: readonly Rule[] = [
   },
   {
     id: 'wrong-origin',
-    day: 0,
+    day: 5,
     title: 'Where from',
     briefing: 'A team can only be calling from the world the mission log sent it to.',
     evidence: (a, ref) => (a.voice && missionFor(ref, a.teamId) ? ['voice.origin', `missions.${a.teamId}.destination`] : null),
@@ -195,12 +195,25 @@ export const VOICE_RULES: readonly Rule[] = [
   },
 ];
 
-export const ALL_RULES: readonly Rule[] = [...RULES, ...VOICE_RULES];
+/** Every rule, in the order the campaign brings them in. */
+export const ALL_RULES: readonly Rule[] = [...RULES, ...VOICE_RULES].sort((x, y) => x.day - y.day);
 
-export const MAX_DAY = RULES.length;
+/** Length of the campaign. */
+export const MAX_DAY = 7;
 
+/**
+ * The rules in force on a campaign day. The schedule, one new idea a day:
+ *   1 valid codes          2 expiry dates        3 the roster (on base, missing)
+ *   4 voices: the leader   5 headcount, origin   6 duress digit, forgeries
+ *   7 recalls (the newest bulletin wins)
+ */
 export function activeRules(day: number): Rule[] {
-  return RULES.filter((r) => r.day <= day);
+  return ALL_RULES.filter((r) => r.day <= day);
+}
+
+/** The rules a day brings in. */
+export function newRules(day: number): Rule[] {
+  return ALL_RULES.filter((r) => r.day === day);
 }
 
 export function rulesById(ids: readonly RuleId[]): Rule[] {

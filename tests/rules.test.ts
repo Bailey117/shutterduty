@@ -1,16 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { brokenRules, makeArrival, nextArrival } from '../src/game/arrivals';
 import { buildReference, campaignTeams } from '../src/game/reference';
-import { MAX_DAY, RULES, activeRules, entryFor, hamming, judge, nearMiss } from '../src/game/rules';
+import { ALL_RULES, MAX_DAY, activeRules, entryFor, hamming, judge, nearMiss, newRules } from '../src/game/rules';
 import { Rng } from '../src/game/rng';
 import type { Intent } from '../src/game/types';
 
 const SEEDS = Array.from({ length: 25 }, (_, i) => `seed-${i}`);
 
 describe('rules', () => {
-  it('one new rule a day, seven days', () => {
-    expect(RULES.map((r) => r.day)).toEqual([1, 2, 3, 4, 5, 6, 7]);
-    for (let d = 1; d <= MAX_DAY; d++) expect(activeRules(d)).toHaveLength(d);
+  it('brings the orders in on schedule, every day adding something', () => {
+    const schedule = Object.fromEntries(Array.from({ length: MAX_DAY }, (_, i) => [i + 1, newRules(i + 1).map((r) => r.id)]));
+    expect(schedule).toEqual({
+      1: ['unlisted'],
+      2: ['expired'],
+      3: ['not-offworld', 'missing'],
+      4: ['wrong-leader'],
+      5: ['wrong-headcount', 'wrong-origin'],
+      6: ['duress', 'forged'],
+      7: ['recalled'],
+    });
+    expect(activeRules(MAX_DAY)).toHaveLength(ALL_RULES.length);
   });
 });
 
@@ -63,7 +72,7 @@ describe('generated arrivals', () => {
           if (a.intent === 'valid') expect(broken).toEqual([]);
           else expect(broken).toEqual([a.intent]);
           // Only rules in force can be the reason.
-          if (a.intent !== 'valid') expect(RULES.find((r) => r.id === a.intent)!.day).toBeLessThanOrEqual(d);
+          if (a.intent !== 'valid') expect(ALL_RULES.find((r) => r.id === a.intent)!.day).toBeLessThanOrEqual(d);
           expect(judge(a, ref).open).toBe(a.intent === 'valid');
           seen.add(`${d}:${a.intent}`);
           count++;
@@ -72,7 +81,7 @@ describe('generated arrivals', () => {
     }
     expect(count).toBe(SEEDS.length * MAX_DAY * 60);
     // Every rule actually comes up on its own day.
-    for (const r of RULES) expect(seen.has(`${r.day}:${r.id}`), r.id).toBe(true);
+    for (const r of ALL_RULES) expect(seen.has(`${r.day}:${r.id}`), r.id).toBe(true);
   });
 
   it('before day 6, no arrival is a near-miss forgery (it would slip past the day-1 rule)', () => {
@@ -91,7 +100,7 @@ describe('generated arrivals', () => {
   it('explains every refusal in words', () => {
     const ref = buildReference('explain', 7);
     const rng = new Rng('explain');
-    for (const r of RULES) {
+    for (const r of ALL_RULES) {
       const a = makeArrival(rng, ref, r.id, '10:00')!;
       const v = judge(a, ref);
       expect(v.broken).toHaveLength(1);

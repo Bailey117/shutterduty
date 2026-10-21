@@ -48,7 +48,7 @@ export interface Household {
   people: Person[];
 }
 
-export type BillId = 'rent' | 'food' | 'heat' | 'medicine';
+export type BillId = 'rent' | 'food' | 'heat' | 'medicine' | 'gift' | 'coat';
 
 export interface Bill {
   id: BillId;
@@ -69,14 +69,25 @@ export function startingHousehold(): Household {
   };
 }
 
-/** Tonight's bills. Medicine only appears when someone is sick. */
-export function bills(h: Household): Bill[] {
+/**
+ * One-off costs on particular evenings. Nothing bad happens if they are
+ * skipped, except to how the household feels about you.
+ */
+export const EXTRAS: Record<number, { bill: Bill; who: string; yes: string; no: string }> = {
+  3: { bill: { id: 'gift', label: "Pim's birthday present", cost: 8, required: false }, who: 'Pim', yes: 'Pim will not put the present down.', no: 'Pim says she does not mind about the present. She minds.' },
+  5: { bill: { id: 'coat', label: 'A winter coat for Corran', cost: 10, required: false }, who: 'Corran', yes: 'Corran wears the coat indoors, to show you.', no: 'Corran has started wearing two jumpers.' },
+};
+
+/** Tonight's bills. Medicine only appears when someone is sick; some evenings bring an extra. */
+export function bills(h: Household, day = 0): Bill[] {
   const list: Bill[] = [
     { id: 'rent', label: 'Quarters', cost: 20, required: true },
     { id: 'food', label: 'Rations', cost: 10, required: false },
     { id: 'heat', label: 'Heating', cost: 6, required: false },
   ];
   if (h.people.some((p) => p.condition === 'sick')) list.push({ id: 'medicine', label: 'Medicine', cost: 12, required: false });
+  const extra = EXTRAS[day];
+  if (extra && h.people.some((p) => p.name === extra.who && p.condition !== 'gone')) list.push(extra.bill);
   return list;
 }
 
@@ -91,8 +102,8 @@ export interface Night {
  * the well hungry; unpaid heat makes the hungry ill; medicine cures one.
  * Someone already sick who gets neither medicine nor heat is gone by morning.
  */
-export function night(h: Household, pay: Pay, chosen: readonly BillId[]): Night {
-  const due = bills(h).filter((b) => b.required || chosen.includes(b.id));
+export function night(h: Household, pay: Pay, chosen: readonly BillId[], day = 0): Night {
+  const due = bills(h, day).filter((b) => b.required || chosen.includes(b.id));
   const cost = due.reduce((n, b) => n + b.cost, 0);
   const paid = new Set(due.map((b) => b.id));
   const savings = h.savings + pay.total - cost;
@@ -109,6 +120,8 @@ export function night(h: Household, pay: Pay, chosen: readonly BillId[]): Night 
     if (c !== p.condition) morning.push(MORNING[c](p.name));
     return { ...p, condition: c };
   });
+  const extra = EXTRAS[day];
+  if (extra && bills(h, day).some((b) => b.id === extra.bill.id)) morning.push(paid.has(extra.bill.id) ? extra.yes : extra.no);
   if (savings < 0) morning.push('You are in debt to the quartermaster. That will not be allowed to go on.');
   return { household: { savings, people }, morning };
 }
