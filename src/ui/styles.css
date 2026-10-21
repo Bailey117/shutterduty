@@ -240,7 +240,7 @@ button:focus-visible { outline: 3px solid #ffd27a; outline-offset: 3px; }
 
 /* --- Campaign paper bits -------------------------------------------------- */
 .orders li.new { background: rgba(196, 74, 58, 0.1); margin-left: -6px; padding: 2px 4px 2px 6px; border-left: 3px solid #a3241a; }
-.new-tag { display: inline-block; margin-left: 6px; padding: 1px 5px; font: 700 11.5px/1.2 var(--label); letter-spacing: 0.12em; color: #fff; background: #a3241a; transform: rotate(-3deg); vertical-align: 2px; }
+.new-tag { display: inline-block; margin-left: 6px; padding: 1px 5px; font: 700 12.5px/1.2 var(--label); letter-spacing: 0.12em; color: #fff; background: #a3241a; transform: rotate(-3deg); vertical-align: 2px; }
 .note { font-style: italic; }
 .signed { display: block; text-align: right; font-style: normal; font-family: var(--label); letter-spacing: 0.08em; margin-top: 4px; color: #3a2f25; }
 .new-orders { border: 3px double #a3241a; padding: 10px 14px; margin: 14px 0; background: rgba(196, 74, 58, 0.06); }

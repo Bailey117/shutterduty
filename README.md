@@ -6,19 +6,23 @@ check them against the paperwork on your desk and open the iris, or keep it
 shut. The gate is the ring in `src/ring/` (view, dial timeline and sound,
 first built for the Farpoint prototype) with an iris fitted across it.
 
-The playable demo is one desk day, Papers, Please style:
+The game is a seven-day campaign at the desk, Papers, Please style:
 - A fixed 1600x900 landscape scene scaled to the screen; phones held upright
   get a "turn sideways" note (Android also tries fullscreen landscape).
-- A shift clock, 08:00 to 18:00, one game minute per real second. No
-  per-arrival countdown. `?speed=N` runs it N times faster (testing aid).
-- Draggable paperwork: standing orders, code sheet, roster, mission log,
-  bulletins. Voice transcripts and citations print onto the desk.
+- A shift clock, 08:00 to 18:00, one game minute per real second.
+  `?speed=N` runs it N times faster (testing aid).
+- One new idea a day (`activeRules` in src/game/rules.ts):
+  1 valid codes, 2 expiry dates, 3 the roster (on base, missing),
+  4 voice transmissions and the mission log (the leader), 5 headcount and
+  origin, 6 duress digits and one-character forgeries, 7 recalls.
+  Paperwork arrives on the desk as its rules do.
 - Inspect mode: pick two lines and they are compared (src/game/inspect.ts).
-- Pay per correct call, citations (two warnings, then docked), and the
-  evening ledger with the household (src/game/economy.ts).
-
-The seven-day campaign and endless mode from the first prototype are still
-in `src/game/` (with their tests) and will be rebuilt on the desk.
+- Pay per correct call, citations (two warnings, then docked); each evening
+  the bills for the household (src/game/economy.ts). An overrun day pays
+  nothing and must be worked again; too much debt and you are evicted.
+- A story told only through the paperwork, ending on day 7.
+- Endless mode: every rule, no closing time, a seed and a best score.
+- Progress saves to localStorage every night (src/game/campaign.ts).
 
 ```
 npm install
@@ -31,8 +35,10 @@ npm run build:artifact   # one self-contained page: dist/shutter-duty.html
 - `src/game/` pure logic: `rules.ts` (the rules as data), `reference.ts`
   (the day's roster, codes and bulletins), `arrivals.ts` (arrivals built to
   be valid or to break exactly one rule, checked by the engine), `shift.ts`,
-  `campaign.ts` (progress, lost teams, endless best; saved to localStorage).
-- `src/ui/` rendering, the clock, keyboard (O / C) and sound cues.
+  `campaign.ts` (progress, household, story ending, endless best; saved to
+  localStorage), `economy.ts` (pay and bills), `inspect.ts` (comparisons).
+- `src/ring/` the gate: ring view, dial timeline, ring sound, glyphs.
+- `src/ui/` the desk, the iris, the clock, keyboard (O / C / I) and sound cues.
 - All randomness goes through `src/game/rng.ts`; a shift replays from its seed.
 
 Rule definitions where the brief left room:
